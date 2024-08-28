@@ -1,10 +1,7 @@
 package com.springBoot.identity_service.controller;
 
 import com.nimbusds.jose.JOSEException;
-import com.springBoot.identity_service.dto.request.ApiResponse;
-import com.springBoot.identity_service.dto.request.AuthenticationRequest;
-import com.springBoot.identity_service.dto.request.IntrospectRequest;
-import com.springBoot.identity_service.dto.request.LogoutRequest;
+import com.springBoot.identity_service.dto.request.*;
 import com.springBoot.identity_service.dto.response.AuthenticationResponse;
 import com.springBoot.identity_service.dto.response.IntrospectResponse;
 import com.springBoot.identity_service.service.AuthenticationService;
@@ -45,5 +42,14 @@ public class AuthenticationController {
             throws ParseException, JOSEException {
         authenticationService.logout(request);
         return ApiResponse.<Void>builder().build();
+    }
+
+    @PostMapping("/refresh")
+    ApiResponse<AuthenticationResponse> logout(@RequestBody RefreshRequest request)
+            throws ParseException, JOSEException {
+        var result = authenticationService.refreshToken(request);
+        return ApiResponse.<AuthenticationResponse>builder()
+                .result(result)
+                .build();
     }
 }
