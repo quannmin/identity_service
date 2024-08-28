@@ -5,10 +5,7 @@ import com.nimbusds.jose.crypto.MACSigner;
 import com.nimbusds.jose.crypto.MACVerifier;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
-import com.springBoot.identity_service.dto.request.ApiResponse;
-import com.springBoot.identity_service.dto.request.AuthenticationRequest;
-import com.springBoot.identity_service.dto.request.IntrospectRequest;
-import com.springBoot.identity_service.dto.request.LogoutRequest;
+import com.springBoot.identity_service.dto.request.*;
 import com.springBoot.identity_service.dto.response.AuthenticationResponse;
 import com.springBoot.identity_service.dto.response.IntrospectResponse;
 import com.springBoot.identity_service.entity.InvalidatedToken;
@@ -48,13 +45,21 @@ public class AuthenticationService {
     @Value("${jwt.signerKey}")
     protected String SIGNER_KEY;
 
+    @NonFinal
+    @Value("${jwt.valid-duration}")
+    protected long VALID_DURATION;
+
+    @NonFinal
+    @Value("${jwt.refreshable-duration}")
+    protected long REFRESHABLE_DURATION;
+
     public IntrospectResponse introspectResponse(IntrospectRequest request)
             throws ParseException, JOSEException {
             var token = request.getToken();
             boolean isValid = true;
 
             try {
-                verifyToken(token);
+                verifyToken(token, false);
             } catch (AppException e) {
                 isValid = false;
             }
@@ -81,22 +86,51 @@ public class AuthenticationService {
     }
 
     public void logout(LogoutRequest request) throws ParseException, JOSEException {
-        SignedJWT signedJWT = verifyToken(request.getToken());
+        try {
+            SignedJWT signedJWT = verifyToken(request.getToken(), true);
+
+            InvalidatedToken invalidatedToken = InvalidatedToken.builder()
+                    .id(signedJWT.getJWTClaimsSet().getJWTID())
+                    .expiryTime(signedJWT.getJWTClaimsSet().getExpirationTime())
+                    .build();
+
+            logoutRepository.save(invalidatedToken);
+        } catch (AppException exception) {
+            log.info("Token invalid");
+        }
+    }
+
+    public AuthenticationResponse refreshToken(RefreshRequest request)
+            throws ParseException, JOSEException {
+
+        SignedJWT signedJWT = verifyToken(request.getToken(), true);
 
         InvalidatedToken invalidatedToken = InvalidatedToken.builder()
                 .id(signedJWT.getJWTClaimsSet().getJWTID())
                 .expiryTime(signedJWT.getJWTClaimsSet().getExpirationTime())
                 .build();
         logoutRepository.save(invalidatedToken);
-    }
 
-    private SignedJWT verifyToken(String token)
+        var username = signedJWT.getJWTClaimsSet().getSubject();
+        var user = userRepository.findByUsername(username).orElseThrow(() ->
+                new AppException(ErrorCode.USER_NOT_EXISTED));
+
+        var token = generateToken(user);
+        return AuthenticationResponse.builder()
+                .token(token)
+                .authenticated(true)
+                .build();
+    }
+    private SignedJWT verifyToken(String token, boolean isRefresh)
             throws JOSEException, ParseException {
         JWSVerifier verifier = new MACVerifier(SIGNER_KEY.getBytes());
 
         SignedJWT signedJWT = SignedJWT.parse(token);
 
-        Date expiryTime = signedJWT.getJWTClaimsSet().getExpirationTime();
+        Date expiryTime = (isRefresh)
+                ? new Date(signedJWT.getJWTClaimsSet().getIssueTime().toInstant()
+                .plus(REFRESHABLE_DURATION, ChronoUnit.SECONDS).toEpochMilli())
+                : signedJWT.getJWTClaimsSet().getExpirationTime();
 
         var verify = signedJWT.verify(verifier);
 
@@ -117,7 +151,7 @@ public class AuthenticationService {
                 .subject(user.getUsername())
                 .issuer("devteria.com")
                 .issueTime(new Date())
-                .expirationTime(new Date(Instant.now().plus(1, ChronoUnit.HOURS).toEpochMilli()))
+                .expirationTime(new Date(Instant.now().plus(VALID_DURATION, ChronoUnit.SECONDS).toEpochMilli()))
 //        System.currentTimeMillis() + 1000 * 60 * 60
                 .jwtID(UUID.randomUUID().toString())
                 .claim("scope", buildScope(user))
